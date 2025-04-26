@@ -37,10 +37,6 @@ class Embedding:
 
         return np.array(new_x)
 
-#! GPT functions
-def softmax(x):
-    pass
-
 class LayerNorm:
     def __init__(self, *normalized_shape: list, eps: int=1e-5, bias: bool=True):
         self.w = np.ones((normalized_shape))
@@ -58,6 +54,31 @@ class LayerNorm:
                (x - mean) / np.sqrt(var + self.eps) * self.w
 
         return norm
+    
+#! GPT functions
+def softmax(x):
+    B, T, C = x.shape
+
+    new_x = np.zeros_like(x)
+
+    for i in range(B):
+        for j in range(T):
+            x_max = np.max(x[i, j])
+        
+            exp_x = np.zeros(C)
+
+            for k in range(C):
+                exp_x[k] = np.exp(x[i, j, k] - x_max)
+       
+            exp_sum = np.sum(exp_x)
+
+            for k in range(C):
+                new_x[i, j, k] = exp_x[k] / exp_sum
+    
+    return new_x
+
+def gelu(x):
+    return 0.5 * (1 + np.tanh(np.sqrt(2/np.pi) * (x + 0.044715 * x**3)))
 
 #! model
 class PreProcessing(Config):
@@ -78,7 +99,7 @@ class Block(Config):
         self.causal_sa = CausalSelfAttention()
         self.ln_1 = LayerNorm(self.d_model)
 
-        self.fnn = None
+        self.fnn = FNN()
         self.ln_2 = LayerNorm(self.d_model)
 
     def __call__(self, x):
@@ -91,9 +112,20 @@ class CausalSelfAttention:
     def __init__(self):
         pass
 
-class FFN:
+    def __call__(self, x):
+        return x
+
+class FNN(Config):
     def __init__(self):
-        pass
+        self.ll_1 = Linear(self.d_model, 4 * self.d_model)
+        self.ll_2 = Linear(4 * self.d_model, self.d_model)
+
+    def __call__(self, x):
+        x = self.ll_1(x)
+        x = gelu(x)
+        x = self.ll_2(x)
+
+        return x
 
 class PostProcessing(Config):
     def __init__(self):
@@ -103,7 +135,7 @@ class PostProcessing(Config):
     def __call__(self, x):
         x = self.ln(x) # (B, T, C)
         x = self.ll(x) # (B, T, V)
-        logits = np.softmax(x)
+        logits = softmax(x)
 
         return logits
 
@@ -118,15 +150,15 @@ class GPT(Config):
     def __call__(self, tokens):
         x = self.pre_processing(tokens) # (B, T) -> (B, T, C)
 
-        #for block in self.blocks:
-            #x = block(x) # (B, T, C)
+        for block in self.blocks:
+            x = block(x) # (B, T, C)
 
         logits = self.post_processing(x) # (B, T, V)
-
+       
         return logits
 
 model = GPT()
 
-B, T = 4, 256
+B, T = 4, 32
 tokens = np.ones((B, T), dtype=np.int16)
 print(model(tokens))
