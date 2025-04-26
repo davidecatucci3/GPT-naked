@@ -7,7 +7,7 @@ class Config:
     n_layers = 4
     d_model = 128
 
-#! GPT functions
+#! GPT classes
 class Linear:
     def __init__(self, features_in: int, features_out: int, bias: bool=True):
         k = 1 / np.sqrt(features_in)
@@ -36,7 +36,11 @@ class Embedding:
                 new_x[i, j] = self.w[x[i, j]]
 
         return np.array(new_x)
-    
+
+#! GPT functions
+def softmax(x):
+    pass
+
 class LayerNorm:
     def __init__(self, *normalized_shape: list, eps: int=1e-5, bias: bool=True):
         self.w = np.ones((normalized_shape))
@@ -44,12 +48,14 @@ class LayerNorm:
 
         self.eps = eps
         self.bias = bias
+
     def __call__(self, x):
         _, T, _ = x.shape
 
         mean = np.mean(x, axis=-1, keepdims=True)
         var = np.var(x, axis=-1, keepdims=True)
-        norm = (x - mean) / np.sqrt(var + self.eps) * self.w + self.b
+        norm = (x - mean) / np.sqrt(var + self.eps) * self.w + self.b if self.bias else \
+               (x - mean) / np.sqrt(var + self.eps) * self.w
 
         return norm
 
@@ -67,13 +73,39 @@ class PreProcessing(Config):
 
         return x
 
-class Block:
+class Block(Config):
+    def __init__(self):
+        self.causal_sa = CausalSelfAttention()
+        self.ln_1 = LayerNorm(self.d_model)
+
+        self.fnn = None
+        self.ln_2 = LayerNorm(self.d_model)
+
+    def __call__(self, x):
+        x = x + self.causal_sa(self.ln_1(x))
+        x = x + self.fnn(self.ln_1(x))
+
+        return x
+
+class CausalSelfAttention:
     def __init__(self):
         pass
 
-class PostProcessing:
+class FFN:
     def __init__(self):
         pass
+
+class PostProcessing(Config):
+    def __init__(self):
+        self.ll = Linear(self.d_model, self.vocab_size)
+        self.ln = LayerNorm(self.d_model)
+
+    def __call__(self, x):
+        x = self.ln(x) # (B, T, C)
+        x = self.ll(x) # (B, T, V)
+        logits = np.softmax(x)
+
+        return logits
 
 class GPT(Config):
     def __init__(self):
@@ -86,7 +118,12 @@ class GPT(Config):
     def __call__(self, tokens):
         x = self.pre_processing(tokens) # (B, T) -> (B, T, C)
 
-        return x
+        #for block in self.blocks:
+            #x = block(x) # (B, T, C)
+
+        logits = self.post_processing(x) # (B, T, V)
+
+        return logits
 
 model = GPT()
 
