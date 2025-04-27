@@ -6,6 +6,7 @@ class Config:
     ctx_length = 512
     n_layers = 4
     d_model = 128
+    n_heads = 8
 
 #! GPT classes
 class Linear:
@@ -77,6 +78,22 @@ def softmax(x):
     
     return new_x
 
+def softmax4(x):
+    B, NH, T, _ = x.shape
+
+    new_x = np.zeros_like(x)
+
+    for b in range(B):
+        for nh in range(NH):
+            for i in range(T):
+                x_row = x[b, nh, i]  # shape (T,)
+                x_max = np.max(x_row)
+                exp_x = np.exp(x_row - x_max)
+                exp_sum = np.sum(exp_x)
+                new_x[b, nh, i] = exp_x / exp_sum
+
+    return new_x
+
 def gelu(x):
     return 0.5 * (1 + np.tanh(np.sqrt(2/np.pi) * (x + 0.044715 * x**3)))
 
@@ -108,12 +125,37 @@ class Block(Config):
 
         return x
 
-class CausalSelfAttention:
+class CausalSelfAttention(Config):
     def __init__(self):
-        pass
+        self.q = Linear(self.d_model, self.d_model)
+        self.k = Linear(self.d_model, self.d_model)
+        self.v = Linear(self.d_model, self.d_model)
+
+        self.ll = Linear(self.d_model, self.d_model)
 
     def __call__(self, x):
-        return x
+        B, T, C = x.shape
+
+        assert self.d_model % self.n_heads == 0, 'd_model has to be divisible by head_size'
+
+        q = self.q(x)
+        k = self.k(x)
+        v = self.v(x)
+   
+        q = q.reshape(B, T, self.n_heads, -1).transpose(0, 2, 1, 3) # (B, T, C) -> (B, T, nh, hs) -> (B, nh, T, hs)
+        k = k.reshape(B, T, self.n_heads, -1).transpose(0, 2, 1, 3) # (B, T, C) -> (B, T, nh, hs) -> (B, nh, T, hs)
+        v = v.reshape(B, T, self.n_heads, -1).transpose(0, 2, 1, 3) # (B, T, C) -> (B, T, nh, hs) -> (B, nh, T, hs)
+
+        attn = (q @ k.transpose(0, 1, 3, 2)) / np.sqrt(self.d_model) # (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        mask = np.tril(np.ones((T, T), dtype=bool))  # (T, T)
+        attn = np.where(mask, attn, -1e10)
+        attn = softmax4(attn)
+
+        y = (attn @ v).transpose(0, 2, 1, 3).reshape(B, T, C) # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs) -> (B, T, C)
+
+        y = self.ll(y) # (B, T, C)
+
+        return y
 
 class FNN(Config):
     def __init__(self):
@@ -160,5 +202,5 @@ class GPT(Config):
 model = GPT()
 
 B, T = 4, 32
-tokens = np.ones((B, T), dtype=np.int16)
-print(model(tokens))
+tokens = np.random.randint(low=0, high=2 ** 15 - 1, size=(B, T), dtype=np.int16)
+model(tokens)
