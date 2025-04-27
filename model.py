@@ -5,7 +5,7 @@ class Config:
     vocab_size = 32768
     ctx_length = 512
     n_layers = 4
-    d_model = 128
+    d_model = 256
     n_heads = 8
 
 #! GPT classes
@@ -57,42 +57,14 @@ class LayerNorm:
         return norm
     
 #! GPT functions
-def softmax(x):
-    B, T, C = x.shape
+def softmax(input, dim):
+    shifted = input - np.max(input, axis=dim, keepdims=True)
 
-    new_x = np.zeros_like(x)
+    exp = np.exp(shifted)
 
-    for i in range(B):
-        for j in range(T):
-            x_max = np.max(x[i, j])
-        
-            exp_x = np.zeros(C)
+    sum_exp = np.sum(exp, axis=dim, keepdims=True)
 
-            for k in range(C):
-                exp_x[k] = np.exp(x[i, j, k] - x_max)
-       
-            exp_sum = np.sum(exp_x)
-
-            for k in range(C):
-                new_x[i, j, k] = exp_x[k] / exp_sum
-    
-    return new_x
-
-def softmax4(x):
-    B, NH, T, _ = x.shape
-
-    new_x = np.zeros_like(x)
-
-    for b in range(B):
-        for nh in range(NH):
-            for i in range(T):
-                x_row = x[b, nh, i]  # shape (T,)
-                x_max = np.max(x_row)
-                exp_x = np.exp(x_row - x_max)
-                exp_sum = np.sum(exp_x)
-                new_x[b, nh, i] = exp_x / exp_sum
-
-    return new_x
+    return exp / sum_exp
 
 def gelu(x):
     return 0.5 * (1 + np.tanh(np.sqrt(2/np.pi) * (x + 0.044715 * x**3)))
@@ -102,6 +74,8 @@ class PreProcessing(Config):
     def __init__(self):
         self.embedding = Embedding(self.vocab_size, self.d_model)
         self.pos_encoding = Embedding(self.ctx_length, self.d_model)
+
+        self.n_params = (self.vocab_size * self.d_model) + (self.ctx_length * self.d_model)
 
     def __call__(self, tokens):
         emb = self.embedding(tokens) # (B, T, C)
@@ -119,6 +93,8 @@ class Block(Config):
         self.fnn = FNN()
         self.ln_2 = LayerNorm(self.d_model)
 
+        self.n_params = self.causal_sa.n_params + (self.d_model * 2) + self.fnn.n_params + (self.d_model * 2)
+
     def __call__(self, x):
         x = x + self.causal_sa(self.ln_1(x))
         x = x + self.fnn(self.ln_1(x))
@@ -132,6 +108,8 @@ class CausalSelfAttention(Config):
         self.v = Linear(self.d_model, self.d_model)
 
         self.ll = Linear(self.d_model, self.d_model)
+
+        self.n_params = (self.d_model * self.d_model) * 4
 
     def __call__(self, x):
         B, T, C = x.shape
@@ -148,8 +126,8 @@ class CausalSelfAttention(Config):
 
         attn = (q @ k.transpose(0, 1, 3, 2)) / np.sqrt(self.d_model) # (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         mask = np.tril(np.ones((T, T), dtype=bool))  # (T, T)
-        attn = np.where(mask, attn, -1e10)
-        attn = softmax4(attn)
+        attn = np.where(mask, attn, -1e10) # (B, nh, T, T)
+        attn = softmax(attn, dim=2)
 
         y = (attn @ v).transpose(0, 2, 1, 3).reshape(B, T, C) # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs) -> (B, T, C)
 
@@ -161,6 +139,8 @@ class FNN(Config):
     def __init__(self):
         self.ll_1 = Linear(self.d_model, 4 * self.d_model)
         self.ll_2 = Linear(4 * self.d_model, self.d_model)
+
+        self.n_params = (self.d_model * 4*self.d_model) + (self.d_model * 4*self.d_model)
 
     def __call__(self, x):
         x = self.ll_1(x)
@@ -174,10 +154,12 @@ class PostProcessing(Config):
         self.ll = Linear(self.d_model, self.vocab_size)
         self.ln = LayerNorm(self.d_model)
 
+        self.n_params = (self.d_model * self.vocab_size) + (self.d_model * self.d_model)
+
     def __call__(self, x):
         x = self.ln(x) # (B, T, C)
         x = self.ll(x) # (B, T, V)
-        logits = softmax(x)
+        logits = softmax(x, dim=-1)
 
         return logits
 
@@ -188,6 +170,8 @@ class GPT(Config):
         self.pre_processing = PreProcessing()                  
         self.blocks = [Block() for _ in range(self.n_layers)]
         self.post_processing = PostProcessing()
+        
+        self.n_params = self.pre_processing.n_params + Block().n_params + self.post_processing.n_params
 
     def __call__(self, tokens):
         x = self.pre_processing(tokens) # (B, T) -> (B, T, C)
@@ -200,6 +184,10 @@ class GPT(Config):
         return logits
 
 model = GPT()
+
+n_params = model.n_params
+
+print(f'Number of parameters: {n_params / 1e6:.2f}M')
 
 B, T = 4, 32
 tokens = np.random.randint(low=0, high=2 ** 15 - 1, size=(B, T), dtype=np.int16)
