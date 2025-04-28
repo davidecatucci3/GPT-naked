@@ -1,11 +1,12 @@
 import numpy as np
+import tiktoken
 
 #! hyperparameters
 class Config:
-    vocab_size = 32768
+    vocab_size = 50257
     ctx_length = 512
     n_layers = 4
-    d_model = 256
+    d_model = 128
     n_heads = 8
 
 #! GPT classes
@@ -78,6 +79,8 @@ class PreProcessing(Config):
         self.n_params = (self.vocab_size * self.d_model) + (self.ctx_length * self.d_model)
 
     def __call__(self, tokens):
+        _, T = tokens.shape
+
         emb = self.embedding(tokens) # (B, T, C)
         pe = self.pos_encoding(np.arange(0, T).reshape(1, -1)) # (1, T, C)
 
@@ -182,7 +185,19 @@ class GPT(Config):
         logits = self.post_processing(x) # (B, T, V)
        
         return logits
+    
+    def generate(self, tokens, max_tokens):
+        assert tokens.shape[0] < self.ctx_length, 'Cannot generate more then ctx_length'
 
+        while tokens.shape[0] <= max_tokens:
+            logits = model(tokens.reshape(1, -1)) # (1, t, V), t = 1 ... max_tokens
+            last_token = logits[:, -1] # (1, V)
+            ix = np.argmax(last_token) # (1, 1)
+
+            tokens = np.concatenate((tokens, np.array([ix])), axis=0)
+     
+        return tokens
+    
 model = GPT()
 
 n_params = model.n_params
@@ -192,3 +207,13 @@ print(f'Number of parameters: {n_params / 1e6:.2f}M')
 B, T = 4, 32
 tokens = np.random.randint(low=0, high=2 ** 15 - 1, size=(B, T), dtype=np.int16)
 model(tokens)
+
+'''seq = ' '
+
+tn = tiktoken.get_encoding('gpt2')
+
+tokens = np.array(tn.encode(seq))
+
+res = model.generate(tokens, max_tokens=64)
+
+print(tn.decode(res))'''
