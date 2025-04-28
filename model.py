@@ -4,7 +4,7 @@ import tiktoken
 #! hyperparameters
 class Config:
     vocab_size = 50257
-    ctx_length = 512
+    ctx_length = 128
     n_layers = 4
     d_model = 128
     n_heads = 8
@@ -189,10 +189,13 @@ class GPT(Config):
     def generate(self, tokens, max_tokens):
         assert tokens.shape[0] < self.ctx_length, 'Cannot generate more then ctx_length'
 
-        while tokens.shape[0] <= max_tokens:
+        for _ in range(max_tokens):
             logits = model(tokens.reshape(1, -1)) # (1, t, V), t = 1 ... max_tokens
             last_token = logits[:, -1] # (1, V)
             ix = np.argmax(last_token) # (1, 1)
+
+            if tokens.shape[0] + 1 > self.ctx_length:
+                break
 
             tokens = np.concatenate((tokens, np.array([ix])), axis=0)
      
@@ -200,20 +203,4 @@ class GPT(Config):
     
 model = GPT()
 
-n_params = model.n_params
-
-print(f'Number of parameters: {n_params / 1e6:.2f}M')
-
-B, T = 4, 32
-tokens = np.random.randint(low=0, high=2 ** 15 - 1, size=(B, T), dtype=np.int16)
-model(tokens)
-
-'''seq = ' '
-
-tn = tiktoken.get_encoding('gpt2')
-
-tokens = np.array(tn.encode(seq))
-
-res = model.generate(tokens, max_tokens=64)
-
-print(tn.decode(res))'''
+print(f'Number of parameters: {model.n_params / 1e6:.2f}M')
